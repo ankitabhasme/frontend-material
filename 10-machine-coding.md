@@ -325,6 +325,8 @@ export function CommentThread({ comments }: { comments: Comment[] }) {
 
 ### 7) Custom hooks: `useDebounce` and `useFetch` with cancellation
 
+> For the rest of the popular "missing hooks" set — storage, timers, DOM/browser bindings, state helpers — see [25 — Custom Hooks Library](25-react-custom-hooks-polyfills.md).
+
 ```tsx
 export function useDebounce<T>(value: T, delay = 300): T {
   const [debounced, setDebounced] = useState(value);

@@ -168,6 +168,29 @@ For pure static SPAs a CDN usually beats a container. Containers earn their plac
 
 ---
 
+## PCF / Cloud Foundry (PaaS Deployment)
+
+Common in enterprises (banks, insurers) that standardized on Pivotal/VMware Cloud Foundry before Kubernetes ate the ecosystem — still worth talking-points fluency even if your daily driver is CDN/K8s.
+
+- **`cf push`**: the whole deploy model — push source or a build artifact, Cloud Foundry's **buildpack** auto-detects the runtime and produces a running "droplet," no Dockerfile required. For a static frontend: `staticfile_buildpack` serves `dist/` via an nginx layer under the hood; for an SSR/Node app, `nodejs_buildpack` runs it directly.
+- **`manifest.yml`**: declares app name, memory/disk quota, instance count, buildpack, and routes — the PCF equivalent of a Helm values file or a `docker-compose.yml`, checked into the repo so a deploy is reproducible.
+  ```yaml
+  applications:
+    - name: catalog-ui
+      memory: 256M
+      instances: 2
+      buildpack: staticfile_buildpack
+      routes:
+        - route: catalog-ui.apps.internal.example.com
+  ```
+- **Orgs & spaces**: an **org** is the billing/quota boundary (a business unit); a **space** inside it is an environment (dev/staging/prod) with its own role-based access. Mentally map this to a K8s namespace + resource quota, but with the org layer added on top for multi-team governance.
+- **Scaling**: `cf scale -i <instances> -m <memory>` — horizontal (instance count) and vertical (memory/disk) scaling as one command; PCF's scheduler places instances across the underlying cell infrastructure, which you don't manage directly.
+- **Services**: `cf create-service` + `cf bind-service` provisions and wires a backing service (a managed DB, a message queue) into the app via injected `VCAP_SERVICES` env vars — analogous to a K8s `Secret`/`ConfigMap` binding, but marketplace-driven.
+- **Trade-off vs Kubernetes/CDN**: PCF trades control for simplicity — no Dockerfiles, no YAML manifests to hand-write, no cluster to operate, and a consistent `cf push` workflow across every team. The cost is less flexibility: no custom sidecars, no fine-grained networking policy, and none of a CDN's edge-caching/global-distribution model for static assets. That's precisely why it fits **internal, enterprise-network-only apps** where public CDN distribution isn't the deployment model in the first place, rather than public-facing consumer products.
+- **Health checks**: `cf app` health-check type — `port` (TCP reachability, the default), `http` (hits a path and expects 200, better for real app-health), or `process` (just the process is alive) — pick `http` for anything beyond a trivial static file server.
+
+---
+
 ## Environment Config & Secrets
 
 **The cardinal rule: never put a secret in the bundle.** Anything bundled into client JS is public — inspectable in DevTools. `VITE_`/`NEXT_PUBLIC_` prefixes literally mean "this will be exposed to the browser."
@@ -230,6 +253,57 @@ Either way the win is the same: version, changelog, and tag are derived, not han
 
 ---
 
+## Git Workflow, Jenkins & Agile Delivery
+
+The JD names Jenkins pipelines and JIRA/Agile tracking specifically — these are process/tooling fundamentals that sit alongside the pipeline design above.
+
+### Git workflow
+
+- **Trunk-based development** (short-lived branches, frequent merges to `main`, feature flags for incomplete work) vs **GitFlow** (long-lived `develop`/`release`/`feature` branches). Trunk-based is the modern default for teams that can ship continuously: long-lived branches accumulate drift, produce painful merges, and delay integration — the exact problems CI/CD is meant to eliminate. GitFlow still earns its place for products with genuinely scheduled, versioned releases (e.g., shipped/installed software) where a `release` branch stabilizes independently of ongoing `main` development.
+- **Rebase vs merge**: rebase for keeping a feature branch's history linear and easy to review (rewrite local, unpublished commits onto latest `main`); merge commits for preserving the true history of when branches integrated. Never rebase a branch other people have already pulled — rewriting shared history breaks everyone else's local state.
+- **Conventional commits** (`feat:`, `fix:`, `chore:`) — enables automated changelog/semver tooling (semantic-release, Changesets — see above) and makes `git log`/`git blame` genuinely useful for understanding *why*, not just *what*.
+- **Protecting `main`**: required PR review, required status checks (CI green), no direct pushes, and (for a payments-grade codebase) required signed commits/linear history. This is the actual enforcement mechanism behind "every change is reviewed and tested" — a policy without branch protection is just a suggestion.
+
+### Jenkins (declarative pipelines)
+
+```groovy
+pipeline {
+  agent any
+  stages {
+    stage('Install')   { steps { sh 'npm ci' } }
+    stage('Lint & Type') {
+      parallel {
+        stage('Lint')     { steps { sh 'npm run lint' } }
+        stage('Typecheck'){ steps { sh 'npm run typecheck' } }
+      }
+    }
+    stage('Test')  { steps { sh 'npm test -- --coverage' } }
+    stage('Build') { steps { sh 'npm run build' } }
+    stage('Deploy') {
+      when { branch 'main' }
+      steps { sh 'cf push -f manifest.yml' }   // e.g. onward to PCF
+    }
+  }
+}
+```
+
+- **Declarative vs scripted pipelines**: declarative (the `pipeline { stages { ... } }` structure above) is the modern, constrained, more readable form; scripted (raw Groovy) is more flexible but harder to review/maintain — default to declarative unless a stage genuinely needs Groovy's full power.
+- **Agents**: `agent any` runs on any available executor; pinning to a labeled agent (`agent { label 'node20' }`) matters when builds need a specific toolchain/OS.
+- **Shared libraries**: common pipeline logic (a standard build/test/deploy sequence used by many repos) factored into a versioned Jenkins Shared Library, so 20 teams aren't copy-pasting the same Jenkinsfile — the CI equivalent of not repeating yourself across repos.
+- **Parallel stages**: independent stages (lint, typecheck) run concurrently to cut wall-clock, same fail-fast principle as any CI pipeline.
+- **Credentials**: injected via Jenkins' credential store (`withCredentials`), never hard-coded in the Jenkinsfile — same "never bake secrets into the pipeline definition" discipline as the "never bake secrets into the bundle" rule above.
+
+### Agile delivery: Scrum vs Kanban, and JIRA in practice
+
+- **Scrum** — fixed-length sprints, sprint planning/review/retro ceremonies, a committed sprint backlog. Fits work with a natural planning horizon and a team that benefits from a regular cadence of demos/retros.
+- **Kanban** — continuous flow, WIP limits instead of sprint boundaries, pull-based. Fits support/maintenance-heavy work or teams where priorities shift too fast for a 2-week commitment to hold up.
+- **Story points vs no-estimates**: points (relative sizing, often Fibonacci-like) are useful for capacity planning and forecasting; the failure mode is treating them as a productivity metric ("velocity") to compare people or teams — that incentivizes inflating estimates, not delivering value. A lead frames points as a planning tool, not a performance metric.
+- **Definition of Done**: an explicit, team-agreed checklist (code reviewed, tests passing, deployed to staging, accessibility checked, etc.) that turns "done" from a subjective claim into a verifiable gate — this is what actually prevents "done" work that reappears as a bug three sprints later.
+- **JIRA in practice**: epics → stories → subtasks for traceability from a business goal down to a shippable unit; linking PRs/commits to tickets (via branch naming or commit message conventions) so `git log` and JIRA stay in sync and anyone can trace a production change back to its ticket and business justification.
+- **Managing WIP**: a lead's actual lever for velocity is often *reducing* work-in-progress (fewer things half-done, more things fully done) rather than adding people — a queueing-theory point (Little's Law) that's more actionable than it sounds: cutting WIP in half typically cuts cycle time by more than adding a second engineer to unblock it.
+
+---
+
 ### Interview Questions — CI/CD & DevOps
 
 **Walk me through how you'd order CI stages for a frontend app, and why.**
@@ -259,6 +333,10 @@ Either way the win is the same: version, changelog, and tag are derived, not han
 **How do you handle source maps for a production frontend?**
 
 > I generate them and upload them to the error tracker at build time, tied to the release and commit so stack traces symbolicate against the exact build — otherwise every Sentry trace is minified garbage. But I do not serve them publicly, because a public source map hands out your source. So the flow is: build with source maps, upload to Sentry, then strip them from the deployed artifact or lock down access. Tagging every error event with the release version is what lets me correlate a spike to the specific deploy that caused it.
+
+**What is PCF, and how would you deploy a frontend app on it compared to your CDN/Kubernetes workflow?**
+
+> Cloud Foundry is a PaaS — you `cf push` source or an artifact, a buildpack auto-detects the runtime and produces a running droplet, so a static frontend can ship via the `staticfile_buildpack` with no Dockerfile at all. A `manifest.yml` declares the app name, instance count, memory, and routes, checked into the repo the same way I'd check in a Helm values file. Orgs and spaces give multi-team governance — an org as the billing/quota boundary, spaces inside it as environments with their own access control. The trade-off versus CDN/K8s is control for simplicity: no Dockerfiles, no cluster to operate, one consistent `cf push` workflow across teams, but no custom networking, no sidecars, and none of a CDN's edge-caching/global-distribution model. That's exactly why it fits internal, enterprise-network-only apps rather than public-facing consumer products where CDN distribution is the whole point.
 
 **What metrics would you put SLOs on for a frontend, and how do you alert?**
 

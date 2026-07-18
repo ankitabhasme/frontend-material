@@ -132,6 +132,32 @@ Multiple components + real store/router/providers + MSW. This is the trophy's sw
 - Keep E2E to **critical revenue/auth journeys** (login, checkout, core CRUD). They're the slowest and flakiest; every one you add is a maintenance liability.
 - Seed state via API/DB, not by clicking through setup UI — faster and less flaky.
 
+### BDD with Cucumber / Gherkin
+
+Gherkin specs (`Feature` / `Scenario` / `Given-When-Then`) are meant to be readable and, ideally, writable by non-engineers — PM, BA, QA — as executable acceptance criteria.
+
+```gherkin
+Feature: Login
+  Scenario: Valid credentials log the user in
+    Given I am on the login page
+    When I enter valid credentials
+    And I submit the form
+    Then I should see the dashboard
+```
+
+```ts
+// step definitions — the glue code mapping Gherkin lines to real test actions
+Given('I am on the login page', () => { cy.visit('/login'); });
+When('I enter valid credentials', () => {
+  cy.get('[name=email]').type('a@b.com');
+  cy.get('[name=password]').type('hunter2');
+});
+Then('I should see the dashboard', () => { cy.url().should('include', '/dashboard'); });
+```
+
+- **Tooling**: `@badeball/cypress-cucumber-preprocessor` wires Gherkin into Cypress; `playwright-bdd` does the same for Playwright — both compile feature files into runnable specs against the same underlying runner covered above.
+- **Trade-off, stated plainly**: BDD-the-practice (writing acceptance criteria as executable specs before coding, collaboratively) is genuinely valuable for cross-functional alignment. Cucumber-the-tool is a real cost: step definitions are an indirection layer that duplicates logic already living in page objects/helpers, feature files drift from their step definitions as the code evolves, and a purely-engineering team ends up writing "Given/When/Then" ceremony that only engineers ever read. **Lead call**: adopt it when there's a genuine non-technical audience authoring or reviewing scenarios; skip it and write plain Playwright/Cypress specs when the team is engineers-only — direct specs are faster to write, refactor, and debug.
+
 ### Visual regression
 
 Screenshot diffing (Playwright snapshots, Chromatic, Percy, Loki) catches CSS/layout regressions that DOM assertions can't. Run against a component library / Storybook. Watch for flakiness from fonts, animations, and antialiasing — freeze time, disable animations, pin viewport.
@@ -253,3 +279,7 @@ What a lead actually enforces:
 **A test fails intermittently in CI. How do you handle it as the person owning test strategy?**
 
 > First, flaky tests are worse than no test because they erode trust in the whole suite, so I treat them as incidents. Short term I quarantine the test — tag it, pull it out of the blocking gate, and file a ticket with an SLA — rather than leaving a permanent skip. Then I root-cause: the usual culprits are real timers instead of fake ones, unmocked network calls, shared mutable state between tests, animations, or a race in a `waitFor`. The fix is enforcing isolation — fresh render per test, `resetHandlers`, cleared mocks, a fixed clock and locale, and no live network via MSW. I allow a small capped retry count in CI to cut noise but I treat a rising retry rate as a metric to investigate, not a solution, and I keep a flaky-test dashboard so we fix root causes instead of normalizing a red main.
+
+**When would you introduce Cucumber/Gherkin into an E2E suite, and what's the real cost?**
+
+> I separate BDD-the-practice from Cucumber-the-tool. Writing acceptance criteria collaboratively as Given/When/Then before coding is valuable whenever there's a genuine non-technical audience — PM, BA, QA — authoring or reviewing scenarios; it becomes shared, living documentation. But wiring that into Cucumber adds a real indirection layer: step definitions duplicate logic that already lives in page objects, feature files drift from their glue code as specs evolve, and an engineering-only team ends up maintaining ceremony that only engineers read anyway. So my call is: adopt Cucumber when cross-functional authorship is real, and write plain Playwright/Cypress specs directly when it's not — the direct specs are faster to write, refactor, and debug, and I'd rather not pay the indirection tax for an audience that doesn't exist.

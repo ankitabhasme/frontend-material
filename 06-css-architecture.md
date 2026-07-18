@@ -122,6 +122,15 @@ Runtime, cascading, inheritable variables — unlike Sass vars they're live in t
 - Scope tokens to components for local overrides; expose a semantic layer (`--color-surface`) over a primitive layer (`--blue-500`).
 - `@property` registers a custom property with a type, enabling **animatable** variables and typed fallbacks.
 
+## From Figma to Production UI
+
+- **Tokens are the bridge, not the eyeball.** Figma variables/styles (color, spacing, type scale) should map close to 1:1 onto CSS custom properties or a token pipeline (Tokens Studio → Style Dictionary → per-platform output). When that pipeline exists, a designer's token edit flows to code without a human re-transcribing hex values — treat any manual "read the hex off the canvas" step as a process gap to fix, not a normal workflow.
+- **Dev Mode / Inspect is a source of intent, not a spec to pixel-chase blindly.** If Inspect reports `13px` of padding somewhere your system uses an 8px scale, that's a signal to flag back to design ("did you mean 12/16?"), not a value to hard-code — hard-coding one-off values is how a design system quietly rots into inconsistent spacing.
+- **A mock is a snapshot; the browser is continuous.** Figma frames are typically fixed-width captures at 2-3 breakpoints. The engineer's actual job is inferring the fluid/intrinsic behavior *between and beyond* those captures — `clamp()`-based fluid type, container queries, intrinsic sizing — rather than only matching the exact pixels of the frames given and leaving everything else undefined.
+- **Componentize by behavior, not by Figma's grouping.** A single Figma auto-layout frame might correctly become three composable components in code (or vice versa) — match your component/variant API to what the *design system* intends, not to how the designer happened to group layers.
+- **Verify fidelity systematically**, not by squinting: Figma's own inspect-diff, or exporting a reference image and running it through a visual-regression tool ([12-testing.md](12-testing.md)) against the built component. Spacing and line-height drift are the most common "pixel-perfect" complaints and the easiest to miss by eye.
+- **Flag gaps early, don't silently invent them.** Static mocks routinely omit hover/focus/active/error/empty/loading states, and don't surface accessibility problems (color-only contrast cues, missing focus treatment) or real-world dynamic content (long strings, truncation, RTL, empty states). A senior engineer raises these as questions back to design during handoff, rather than quietly making a judgment call that ships inconsistently across the app.
+
 ## Responsive & Fluid Design
 
 - **`clamp(min, preferred, max)`** for fluid type/spacing without breakpoints.
@@ -179,6 +188,22 @@ Decision guidance for a lead:
 - Don't hide content from AT with `display:none` if it should be read; use a visually-hidden (`.sr-only`) pattern for screen-reader-only text.
 - Maintain WCAG contrast on text; test tokens in both themes. Respect `prefers-reduced-motion` for all non-essential animation and `prefers-reduced-data`/`prefers-contrast` where relevant.
 
+## UI/UX Fundamentals: Spacing, Type, Hierarchy
+
+The JD calls out "layout, typography, spacing, and visual hierarchy" explicitly — these are the visual-design fundamentals behind the CSS mechanics above.
+
+- **Spacing scale (4pt/8pt grid)**: pick a base unit (4 or 8px) and derive every margin/padding/gap from it (4, 8, 12, 16, 24, 32, 48, 64...) rather than ad-hoc pixel values. This is what makes an interface feel "designed" rather than "assembled" — consistent rhythm your eye registers even without consciously noticing it. Encode the scale as design tokens (`--space-2: 8px`), never hard-code raw pixel values in components.
+- **Typographic scale & vertical rhythm**: sizes should follow a ratio (e.g. a modular scale like 1.25×: 12/16/20/25/31px) rather than arbitrary jumps. Vertical rhythm means line-heights and margins are multiples of a shared baseline unit, so text blocks align to a consistent grid — this is why `line-height` is usually expressed unitless (a multiplier) rather than a fixed px value, so it scales with `font-size`.
+- **Visual hierarchy**: the eye should have an obvious entry point and a clear reading order. Achieved primarily via size, weight, and color/contrast — not by inventing more colors, but by systematically varying 2-3 established levels (e.g. heading/subheading/body). Whitespace is itself a hierarchy tool: more space around an element signals more importance, not less.
+- **Layout fundamentals**: alignment (things that relate should share an edge), proximity (related items grouped with less space between them than unrelated items), and consistency (the same spacing/sizing decisions recur across the product so users build a mental model once and reuse it).
+
+## Cross-Browser Compatibility
+
+- **Feature detection over browser sniffing**: `@supports (display: grid) { ... }` or JS `if ('IntersectionObserver' in window)` — never branch on `navigator.userAgent`, which is unreliable (spoofable, and every browser lies in it for legacy compat reasons) and doesn't degrade gracefully when a *new* browser you didn't anticipate shows up.
+- **Progressive enhancement**: build the core experience to work with baseline CSS/HTML, then layer on enhancements (`@supports`, newer CSS features) for browsers that support them — rather than building for the newest browser and patching backward, which tends to leave older browsers broken rather than merely plainer.
+- **Where it still actually bites in practice**: Safari lags on some newer CSS/JS APIs and has historically had the most inconsistent `100vh`/viewport-unit and flexbox-gap behavior on mobile; date/number input styling differs meaningfully across browsers; and any WebKit-only quirk needs to be tested on real Safari (an iOS simulator or BrowserStack), not assumed away because "it works in Chrome." I treat cross-browser testing as part of the Definition of Done, not a pre-release scramble — run the critical path against a real browser matrix (BrowserStack/Sauce Labs, or Playwright's multi-browser runners) in CI, not just Chromium.
+- **Autoprefixer / Browserslist** in the build pipeline (via PostCSS) auto-adds vendor prefixes based on a declared support matrix (`.browserslistrc`), so engineers don't hand-write `-webkit-`/`-moz-` and the matrix is a single source of truth shared by CSS prefixing, Babel's JS transpilation target, and any polyfill decisions.
+
 ### Interview Questions — CSS Architecture
 
 **A modal with `z-index: 99999` still renders behind the header. Diagnose it.**
@@ -204,3 +229,6 @@ Decision guidance for a lead:
 
 **Explain specificity precisely and how `:where()` and `:is()` differ.**
 > Specificity is a tuple of inline, IDs, classes/attributes/pseudo-classes, and elements/pseudo-elements, compared left to right, with source order breaking ties and `!important`/inline sitting above the ladder. `:is()` takes the specificity of its most specific argument, which can surprise you; `:where()` always contributes zero specificity, so I use it for base styles that must be trivially overridable. That zero-specificity property is what makes `:where()` safe in a shared framework layer.
+
+**How do you turn a Figma design into pixel-perfect production UI, and what do you do when the mock doesn't cover every case?**
+> I treat design tokens as the actual bridge — Figma variables mapped to CSS custom properties or a Style Dictionary pipeline — so color/spacing/type values flow from design to code instead of being hand-transcribed off the canvas. Dev Mode/Inspect gives me exact values, but I treat those as intent, not gospel — if a value doesn't fit our spacing scale I flag it back to design rather than hard-coding a one-off that rots the system. Since a Figma frame is a fixed-width snapshot at a couple of breakpoints, my job is inferring the fluid behavior between and beyond them with `clamp()` and container queries, not just matching the exact pixels given. For verification I use visual-regression diffing rather than eyeballing, since spacing/line-height drift is easy to miss by eye. And critically, static mocks almost always omit hover/focus/error/empty/loading states and dynamic-content edge cases like long strings or RTL — I raise those as explicit questions during handoff instead of silently inventing an answer that ends up inconsistent across the app.

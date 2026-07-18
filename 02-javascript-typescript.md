@@ -459,6 +459,122 @@ declare global {
 
 Prefer **union of string literals** (`type Status = 'active' | 'idle'`) over `enum` in most code: no runtime footprint, better tree-shaking, direct JSON compatibility, and simpler narrowing. `enum` generates real runtime objects (numeric enums are reverse-mapped and error-prone); `const enum` inlines but breaks under isolated-modules/Babel. Reach for enums mainly when you need a named runtime namespace of values.
 
+## Modern JavaScript: ES2023–ES2025
+
+The JD names "ES2025 features" explicitly — these are the recent additions most candidates haven't internalized yet, so they're a real differentiator.
+
+### Immutable array methods (ES2023)
+
+`sort`/`reverse`/`splice`/array-index-assignment all mutate in place — a problem for React/Redux state, which needs new references to detect change. The copying counterparts return a new array and leave the original untouched:
+
+```js
+const a = [3, 1, 2];
+const sorted = a.toSorted();      // [1,2,3] — a is still [3,1,2]
+const reversed = a.toReversed();  // [2,1,3] — a untouched
+const spliced = a.toSpliced(1, 1, 'x'); // [3,'x',2] — a untouched
+const withEl = a.with(0, 99);     // [99,1,2] — a untouched
+a.at(-1);                          // 2 — negative indexing without `a[a.length-1]`
+[1, [2, 3], NaN].findLast(x => Number.isNaN(x));      // NaN — findLast/findLastIndex search from the end
+```
+
+### `Object.groupBy` / `Map.groupBy` (ES2024)
+
+Replaces the boilerplate `reduce` groupBy pattern:
+
+```js
+const orders = [{ status: 'paid', id: 1 }, { status: 'pending', id: 2 }, { status: 'paid', id: 3 }];
+const byStatus = Object.groupBy(orders, o => o.status);
+// { paid: [{...id:1}, {...id:3}], pending: [{...id:2}] }
+```
+
+`Object.groupBy` returns a **null-prototype object** (no `hasOwnProperty`/`toString` pollution risk) keyed by string/symbol; `Map.groupBy` returns a real `Map`, which is the right choice when keys aren't strings (objects, non-string primitives) or when insertion order and `Map` semantics (size, iteration) matter.
+
+### `Promise.withResolvers` (ES2024)
+
+Replaces the manual "capture resolve/reject outside the executor" pattern that everyone used to hand-roll:
+
+```js
+// before
+let resolve, reject;
+const p = new Promise((res, rej) => { resolve = res; reject = rej; });
+
+// ES2024
+const { promise, resolve, reject } = Promise.withResolvers();
+```
+
+Real use: converting an event-based API (a WebSocket message, an EventEmitter) into an awaitable promise from outside the executor's closure — a queue/deferred pattern that used to require the awkward external-variable capture above.
+
+### Array.fromAsync (ES2024)
+
+```js
+async function* fetchPages() { yield await fetchPage(1); yield await fetchPage(2); }
+const all = await Array.fromAsync(fetchPages()); // awaits each yielded value, collects into an array
+```
+
+The async counterpart to `Array.from` — consumes an async iterable or an iterable of promises and awaits each value before collecting, instead of you writing a manual `for await...of` + push loop.
+
+### Iterator Helpers (ES2025)
+
+Lazy, chainable operations directly on iterators/generators — no need to materialize an intermediate array first:
+
+```js
+function* naturals() { let n = 1; while (true) yield n++; }
+
+const firstFiveEvenSquares = naturals()
+  .filter(n => n % 2 === 0)
+  .map(n => n * n)
+  .take(5)
+  .toArray(); // [4, 16, 36, 64, 100]
+```
+
+The trap/payoff: this is **lazy** — `.filter`/`.map` on an infinite generator would blow the stack/loop forever with `Array.prototype` methods (which require a finite array up front), but Iterator Helpers only pull as many values as `.take(5)` demands. `.drop`, `.flatMap`, `.reduce`, `.some`/`.every`/`.find` are also available directly on any iterator.
+
+### New Set methods (ES2025)
+
+Set algebra without manually looping:
+
+```js
+const admins = new Set(['a', 'b', 'c']);
+const active = new Set(['b', 'c', 'd']);
+admins.intersection(active);   // Set {'b','c'}
+admins.union(active);          // Set {'a','b','c','d'}
+admins.difference(active);     // Set {'a'}
+admins.isSubsetOf(active);     // false
+```
+
+### Explicit Resource Management: `using` / `await using` (ES2025)
+
+Deterministic cleanup — like `try/finally` but declarative, and composes across multiple resources without nested blocks:
+
+```js
+class DbConnection {
+  [Symbol.dispose]() { this.close(); }              // sync resource
+}
+class FileHandle {
+  async [Symbol.asyncDispose]() { await this.close(); } // async resource
+}
+
+function query() {
+  using conn = new DbConnection();   // conn.close() called automatically at block exit
+  return conn.run('SELECT 1');
+}                                      // ← dispose runs here, even if run() throws
+
+async function readFile() {
+  await using handle = new FileHandle();
+  return await handle.read();
+}                                      // ← await handle[Symbol.asyncDispose]() runs here
+```
+
+This is the same problem `try/finally` solves, but `using` composes cleanly when you have several resources (each gets its own disposer call in reverse declaration order) without a pyramid of nested `try/finally` blocks — directly relevant to anything holding a DB connection, a file handle, or a lock in a payments backend.
+
+### Other ES2025 items worth knowing by name
+
+- **RegExp `v` flag (`unicodeSets`)** — a stricter successor to `u` that allows set operations inside character classes (`[\p{Letter}--[a-z]]`) and fixes some `u`-flag inconsistencies with case-insensitive matching of certain Unicode properties.
+- **RegExp match indices (`d` flag)** — `/foo/d.exec(str).indices` gives start/end offsets for each capture group, useful for highlighting/annotating matched substrings without a second manual scan.
+- **`Object.hasOwn(obj, key)`** — replaces `Object.prototype.hasOwnProperty.call(obj, key)`; safe even if `obj` has no prototype (`Object.create(null)`) or has overridden `hasOwnProperty`.
+- **`Error` `cause` option** — `throw new Error('load failed', { cause: err })` preserves the original error when re-throwing a higher-level one, instead of losing the root cause — critical for debugging a chain of wrapped errors in production logs.
+- **Temporal (stage 3, not yet shipped everywhere)** — the eventual `Date` replacement: immutable, no implicit UTC/local ambiguity, explicit `PlainDate`/`ZonedDateTime`/`Duration` types. Know *why* it exists even if you can't yet rely on it landing everywhere: `Date` is mutable, its parsing is inconsistent across engines, and it conflates a timestamp with a calendar date, which is a recurring source of off-by-one-timezone bugs — the exact kind of bug that's dangerous in a payments app dealing with settlement dates across timezones.
+
 ### Interview Questions — JavaScript & TypeScript
 
 **Walk me through what prints and why: a `console.log`, a `setTimeout(0)`, a resolved `Promise.then`, and another `console.log`.**

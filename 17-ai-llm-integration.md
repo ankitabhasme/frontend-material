@@ -208,6 +208,44 @@ Dynamic, incrementally-updating content is hostile to screen readers if done nai
 
 ---
 
+## Agentic AI & AI-Assisted Development Workflows
+
+The JD explicitly names "Agentic AI concepts / AI-assisted development workflows" — this is about **using** AI to build software (Copilot, Cursor, Claude Code), distinct from the sections above on **building** LLM-powered products. Treat this as a real differentiator, not a buzzword to namedrop.
+
+### What "agentic" actually means
+
+A single-shot completion takes one prompt, produces one output, done. An **agentic loop** is a model that can (1) decide on an action, (2) call a tool to execute it, (3) observe the result, (4) decide the next action — repeating autonomously until the task is done or it decides to stop, with no human in the loop between steps. The distinction matters because agentic systems can chain many actions with compounding error probability, and each tool call is a place code actually executes — a different risk profile than a chat response.
+
+### AI-assisted dev workflows, realistically
+
+- **What they're good at:** boilerplate, well-specified refactors, test scaffolding, explaining unfamiliar code, first-draft implementations of a clearly-specified function, codemods across many similar call sites.
+- **What they're bad at:** anything requiring context the model wasn't given (undocumented business rules, "why we did it this way" history), subtle concurrency/security reasoning, and — critically — the model is **confidently wrong** as often as it's confidently right. It doesn't hedge in proportion to its actual uncertainty, so a plausible-looking but subtly incorrect diff is the single biggest risk, not an obviously broken one.
+- **The review discipline this demands:** AI-authored code gets the *same* review bar as human code, arguably higher for the first few months of adoption — no "the AI wrote it so it's probably fine." A lead's job is making sure code review doesn't quietly relax because a diff looks clean and well-commented; fluent-sounding code is exactly the failure mode that slips past a tired reviewer.
+
+### Introducing AI tooling to a team responsibly (a lead's job)
+
+- **Guardrails before adoption, not after an incident**: define what categories of change require human review regardless of who/what authored them (anything touching auth, payments, data deletion), and make sure CI gates (tests, types, lint, security scan) apply identically to AI-assisted commits.
+- **IP / data-leakage concerns**: pasting proprietary code, customer data, or secrets into a third-party model is a real compliance exposure — for a payments company this is not hypothetical. Use enterprise-tier tooling with contractual no-training-on-input guarantees, and have an explicit policy on what categories of code/data may or may not go through an external model.
+- **Licensing of generated code**: code suggested by a model trained on public repos carries some (contested, evolving) provenance risk; a lead flags this for legal/compliance rather than assuming it's a non-issue, especially in a codebase with commercial licensing obligations.
+- **Rollout**: start with low-risk categories (tests, docs, internal tooling), expand as trust is earned and measured — don't flip it on for the payment-flow codebase on day one.
+
+### Measuring whether it actually helps
+
+The naive metric — "lines of code generated" or "% of commits touched by AI" — is a vanity metric that rewards volume, not value, and can even move the wrong direction (more generated code to review is a cost, not a win). Better signals: cycle time from PR open to merge, defect/revert rate on AI-assisted vs human-only changes, and qualitative survey data on whether engineers feel unblocked faster. If defect rate rises while velocity "improves," that's the tool encouraging under-reviewed volume — a regression, not a productivity gain.
+
+### Prompt injection & tool-call safety (ties directly to the earlier Function/Tool Calling section)
+
+An agentic coding tool that can run shell commands, edit files, or call APIs is exactly the same class of risk as the tool-calling UI discussed above: a runaway or manipulated loop can take destructive action. The same mitigation applies — a confirmation gate on consequential actions (deleting files, force-pushing, running migrations, anything touching production), a visible trace of what the agent is doing, and a way to interrupt it. Content the agent reads (a fetched web page, a file with attacker-controlled content) can itself carry injected instructions — never let agent-read content alone authorize a destructive tool call.
+
+### Where AI genuinely helps in the SDLC — and where it doesn't
+
+- **Helps:** generating a first draft of unit tests for existing (human-reviewed) logic, drafting PR descriptions/changelogs from a diff, explaining an unfamiliar module, mechanical migrations/codemods across many files following one confirmed pattern.
+- **Doesn't (without a human firmly in the loop):** deciding architecture/trade-offs (it doesn't know your team's constraints, on-call history, or org politics), security-sensitive code (auth, crypto, payment handling) as a first and only pass, anything where the "why" matters more than the "what."
+- **Hallucination mitigation**: never trust a model's claim about an API/library behavior without checking the actual docs or types — it will confidently invent plausible-sounding methods that don't exist. Type-checking and running the code are your actual verification, not the model's confidence.
+- **When NOT to use it**: under time pressure to understand *why* something broke (an incident), when the task requires context that genuinely isn't written down anywhere accessible to the model, or when a junior engineer would use it as a substitute for building their own mental model rather than as a tool — a lead watches for that pattern in mentoring.
+
+---
+
 ### Interview Questions — AI/LLM Integration
 
 **Why must LLM API keys never live in the frontend, and what's the correct architecture?**
@@ -241,3 +279,11 @@ Dynamic, incrementally-updating content is hostile to screen readers if done nai
 **What is RAG at a high level, and what is the frontend's responsibility in a RAG feature?**
 
 > Retrieval-Augmented Generation retrieves relevant documents — typically via embeddings and vector search — and injects them into the prompt so the model's answer is grounded in your data and can cite sources, rather than relying solely on training data. All the retrieval and embedding is server-side. The frontend's job is narrow but real: render citations and let users open the source documents, because grounding is the entire point and provenance is what makes it trustworthy; show retrieval as its own visible step; and handle the "no relevant context found" case gracefully so the model doesn't confabulate an answer that looks authoritative.
+
+**What's the difference between a single-shot LLM completion and an "agentic" workflow, and what new risk does that difference introduce?**
+
+> A single-shot completion is one prompt in, one response out — the blast radius is a wrong answer on screen. An agentic workflow lets the model choose actions, execute them via tools, observe results, and decide the next step in a loop with no human gating each step — so the blast radius becomes whatever the tools can do: run code, call APIs, delete files, make payments. The new risk isn't "the model said something wrong," it's "the model *did* something wrong," and multi-step loops compound error probability at each hop. That's why I treat agentic tool calls with the same confirmation-gate discipline as any consequential action — visible trace, explicit approval for destructive steps, and a kill switch to interrupt a runaway loop.
+
+**How would you introduce AI coding assistants (Copilot/Cursor/Claude Code) to a team responsibly, especially at a company handling payment data?**
+
+> I wouldn't relax code review for AI-authored diffs — if anything the opposite, at least initially, because AI output is confidently wrong as often as it's confidently right, and fluent-looking code is exactly what slips past a tired reviewer. I'd start adoption on low-risk surfaces (tests, docs, internal tooling), keep CI gates identical regardless of authorship, and require human review on anything touching auth, payments, or data deletion no matter who or what wrote it. Separately, I'd flag the compliance angle early: pasting proprietary code or customer data into a third-party model is a real IP/data-leakage exposure, so I'd push for enterprise tooling with contractual no-training guarantees and an explicit policy on what's allowed to go through an external model. I'd measure impact with cycle time and defect/revert rate, not lines-of-code-generated, since that vanity metric rewards volume over judgment.

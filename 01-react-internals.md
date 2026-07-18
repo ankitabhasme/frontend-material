@@ -77,6 +77,7 @@ React keeps two trees: **current** (on screen) and **work-in-progress** (being b
 - `useMemo` / `useCallback` cache values/functions across renders keyed on deps — an optimization, not a semantic guarantee (React may discard the cache).
 - `useRef` — a mutable box that persists across renders without triggering re-render.
 - `useSyncExternalStore` — the correct way to subscribe to external stores (tearing-safe under concurrency).
+- Want to implement `useState`/`useEffect`/`useMemo`/`useCallback`/`useReducer`/`useRef` from scratch to prove you understand this model? See [26 — Polyfilling React's Own Hooks](26-polyfill-core-react-hooks.md).
 
 ## Rendering Flow (End to End)
 
